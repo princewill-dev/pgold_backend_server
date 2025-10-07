@@ -1,0 +1,90 @@
+services:
+  # PostgreSQL Database
+  pgold_db:
+    image: postgres:16-alpine
+    container_name: pgold_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pgold
+      POSTGRES_USER: pgold_user
+      POSTGRES_PASSWORD: pgold_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgold_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - pgold_network
+
+  # Laravel Application
+  pgold_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pgold_app
+    restart: unless-stopped
+    working_dir: /var/www/html
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/var/www/html
+      - ./storage:/var/www/html/storage
+      - ./bootstrap/cache:/var/www/html/bootstrap/cache
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=pgsql
+      - DB_HOST=pgold_db
+      - DB_PORT=5432
+      - DB_DATABASE=pgold
+      - DB_USERNAME=pgold_user
+      - DB_PASSWORD=pgold_pass
+      - QUEUE_CONNECTION=database
+    depends_on:
+      pgold_db:
+        condition: service_healthy
+    networks:
+      - pgold_network
+    command: sh -c "php artisan migrate --force && php-fpm -D && nginx -g 'daemon off;'"
+
+  # Queue Worker for Background Jobs
+  pgold_queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pgold_queue
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - ./storage:/var/www/html/storage
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=pgsql
+      - DB_HOST=pgold_db
+      - DB_PORT=5432
+      - DB_DATABASE=pgold
+      - DB_USERNAME=pgold_user
+      - DB_PASSWORD=pgold_pass
+      - QUEUE_CONNECTION=database
+    depends_on:
+      pgold_db:
+        condition: service_healthy
+      pgold_app:
+        condition: service_started
+    networks:
+      - pgold_network
+    command: sh -c "sleep 10 && php artisan queue:work --tries=3 --timeout=90"
+
+networks:
+  pgold_network:
+    driver: bridge
+
+volumes:
+  pgold_db_data:
+    driver: local
